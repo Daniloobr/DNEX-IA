@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: dnex-ia
+    env: docker
+    plan: free
+    region: ohio
+    envVars:
+      - key: WHISPER_MODEL_SIZE
+        value: tiny
+      - key: WHISPER_DEVICE
+        value: cpu
+      - key: MAX_CONTENT_LENGTH
+        value: 524288000
