@@ -9,4 +9,4 @@ if __name__ == "__main__":
     Dica: Em ambiente real de internet, prefira usar Gunicorn ou Waitress.
     """
     print("🚀 Dnex IA está decolando!")
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=5005, debug=True)
