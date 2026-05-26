@@ -1,9 +1,6 @@
-import io
-import json
 import logging
 import math
 import os
-import struct
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -13,7 +10,6 @@ from typing import Callable, List, Optional
 import numpy as np
 
 from app.core.config import config
-from app.services.cache_service import CacheChunks
 from app.utils.ffmpeg_utils import (
     extrair_chunk_wav_pipe,
     obter_duracao
@@ -24,14 +20,12 @@ logger = logging.getLogger(__name__)
 
 DURACAO_CHUNK_SEGUNDOS = 30
 SOBREPOSICAO_SEGUNDOS = 3
-OVERHEAD_CARREGAMENTO_SEGUNDOS = 1.0
 
 
 _thread_local = threading.local()
 
 
 def _obter_modelo_thread():
-    """Carrega (ou reusa) o WhisperModel na thread atual."""
     if not hasattr(_thread_local, "modelo"):
         from faster_whisper import WhisperModel
         num_cores = os.cpu_count() or 4
@@ -49,7 +43,6 @@ def _obter_modelo_thread():
 
 
 def _wav_bytes_to_float32(wav_bytes: bytes) -> np.ndarray:
-    """Converte bytes de um WAV 16kHz mono 16-bit para array float32."""
     raw = wav_bytes[44:]
     samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
     return samples
@@ -62,7 +55,6 @@ def _transcrever_chunk(
     duracao_chunk: float,
     idioma: Optional[str]
 ) -> List[dict]:
-    """Transcreve um chunk de áudio e retorna lista de segmentos com timestamps ajustados."""
     sigla_idioma = None if not idioma or idioma == "auto" else idioma
 
     inicio_carga = time.perf_counter()
@@ -87,9 +79,8 @@ def _transcrever_chunk(
     tempo_total = time.perf_counter() - tempo_transc
 
     logger.info(
-        f"  Chunk {chunk_index:03d}: {len(audio)/16000:.1f}s áudio "
-        f"→ {len(segmentos)} segmentos em {tempo_total:.1f}s "
-        f"(modelo: {tempo_carga:.2f}s)"
+        f"  Chunk {chunk_index:03d}: {len(audio)/16000:.1f}s audio "
+        f"-> {len(segmentos)} segmentos em {tempo_total:.1f}s"
     )
 
     resultados = []
@@ -110,7 +101,6 @@ def _merge_segmentos(
     duracao_total: float,
     num_chunks: int
 ) -> List[dict]:
-    """Junta segmentos de todos os chunks, ordena e remove sobreposições."""
     todos_segmentos.sort(key=lambda x: x["start"])
 
     if not todos_segmentos:
@@ -143,7 +133,6 @@ def _merge_segmentos(
 
 
 def _texto_eh_continuacao(texto_a: str, texto_b: str) -> bool:
-    """Verifica se texto_b parece continuação de texto_a (compara final/início)."""
     a_clean = texto_a.strip().lower()
     b_clean = texto_b.strip().lower()
     if not a_clean or not b_clean:
@@ -163,10 +152,7 @@ def _escrever_resultado(
     nome_base: str,
     formato_srt: bool,
     incluir_timestamps: bool,
-    idioma_detectado: Optional[str] = None,
-    prob_idioma: Optional[float] = None,
 ) -> str:
-    """Gera o conteúdo .txt ou .srt a partir dos segmentos."""
     linhas = []
 
     if formato_srt:
@@ -175,9 +161,6 @@ def _escrever_resultado(
             fim = _formatar_tempo_srt(s["end"])
             linhas.extend([str(i), f"{inicio} --> {fim}", s["text"], ""])
     else:
-        if idioma_detectado and prob_idioma:
-            linhas.append(f"--- Idioma Detectado: {idioma_detectado} ({prob_idioma:.1f}%) ---")
-            linhas.append("")
         for s in segmentos:
             if incluir_timestamps:
                 inicio = _formatar_tempo(s["start"])
@@ -216,24 +199,16 @@ def transcrever_com_chunks_paralelos(
     formato_srt: bool,
     callback_progresso: Optional[Callable[[int], None]] = None,
 ) -> Path:
-    """
-    Transcreve um vídeo dividindo o áudio em chunks e processando em paralelo.
-
-    - Para vídeos curtos (< 60s), usa o caminho tradicional (WAV inteiro).
-    - Para vídeos longos, divide em chunks de DURACAO_CHUNK_SEGUNDOS (30s)
-      com sobreposição e processa cada chunk em paralelo usando ThreadPoolExecutor.
-    - Usa cache em disco para chunks já processados (retomada de falhas).
-    """
     logger.info("=" * 50)
-    logger.info("Modo RÁPIDO: transcrição paralela com chunks ativada!")
+    logger.info("Modo RAPIDO: transcricao paralela com chunks ativada!")
     logger.info("=" * 50)
     inicio_total = time.perf_counter()
 
     duracao_video = obter_duracao(caminho_video)
-    logger.info(f"Duração do vídeo: {duracao_video:.1f}s ({duracao_video/60:.1f} min)")
+    logger.info(f"Duracao do video: {duracao_video:.1f}s ({duracao_video/60:.1f} min)")
 
     if duracao_video <= 60:
-        logger.info("Vídeo curto (< 60s) — usando transcrição tradicional (sem chunks).")
+        logger.info("Video curto (< 60s) — usando transcricao tradicional (sem chunks).")
         from app.services.transcription_service import ServicoTranscricao
         return ServicoTranscricao.transcrever(
             caminho_wav_completo or caminho_video,
@@ -245,7 +220,6 @@ def transcrever_com_chunks_paralelos(
 
     num_chunks = max(1, math.ceil(duracao_video / DURACAO_CHUNK_SEGUNDOS))
     workers = min(config.MAX_WORKERS_PARALELOS, num_chunks)
-    cache = CacheChunks(config.PASTA_CACHE)
 
     logger.info(
         f"Dividindo em {num_chunks} chunks de ~{DURACAO_CHUNK_SEGUNDOS}s "
@@ -268,39 +242,29 @@ def transcrever_com_chunks_paralelos(
 
     chunks_info = [preparar_chunk(i) for i in range(num_chunks)]
 
-    cache_hits = 0
-    cache_misses = 0
     todos_segmentos = []
     futures_map = {}
+    chunks_lock = threading.Lock()
 
     executor = ThreadPoolExecutor(max_workers=workers)
 
     try:
         with executor:
             for chunk in chunks_info:
-                segmentos_cache = cache.obter(caminho_video, chunk["index"])
-                if segmentos_cache is not None:
-                    todos_segmentos.extend(segmentos_cache)
-                    cache_hits += 1
-                    if callback_progresso:
-                        pct = int((chunk["index"] / num_chunks) * 95) + 2
-                        callback_progresso(min(pct, 97))
-                else:
-                    cache_misses += 1
-                    future = executor.submit(
-                        _processar_chunk_com_retry,
-                        chunk,
-                        caminho_video,
-                        idioma,
-                        cache
-                    )
-                    futures_map[future] = chunk["index"]
+                future = executor.submit(
+                    _processar_chunk_com_retry,
+                    chunk,
+                    caminho_video,
+                    idioma,
+                )
+                futures_map[future] = chunk["index"]
 
             for future in as_completed(futures_map):
                 chunk_index = futures_map[future]
                 try:
                     segmentos = future.result()
-                    todos_segmentos.extend(segmentos)
+                    with chunks_lock:
+                        todos_segmentos.extend(segmentos)
                 except Exception as e:
                     logger.exception(f"Falha no chunk {chunk_index}: {e}")
                     raise
@@ -314,7 +278,6 @@ def transcrever_com_chunks_paralelos(
                     callback_progresso(min(pct, 97))
 
     except Exception:
-        logger.info(f"Cache hits: {cache_hits}, misses: {cache_misses}")
         raise
 
     segmentos_final = _merge_segmentos(todos_segmentos, duracao_video, num_chunks)
@@ -335,9 +298,8 @@ def transcrever_com_chunks_paralelos(
     tempo_total = time.perf_counter() - inicio_total
     speedup = duracao_video / tempo_total if tempo_total > 0 else 0
     logger.info(
-        f"✨ Transcrição paralela concluída em {tempo_total:.1f}s "
-        f"(speedup: {speedup:.1f}x, "
-        f"cache hits: {cache_hits}, misses: {cache_misses})"
+        f"Transcricao paralela concluida em {tempo_total:.1f}s "
+        f"(speedup: {speedup:.1f}x)"
     )
 
     return caminho_final
@@ -347,10 +309,8 @@ def _processar_chunk_com_retry(
     chunk: dict,
     caminho_video: Path,
     idioma: Optional[str],
-    cache: CacheChunks,
     tentativas: int = 2,
 ) -> List[dict]:
-    """Extrai e transcreve um chunk, com retry em caso de falha."""
     for tentativa in range(tentativas):
         try:
             wav_bytes = extrair_chunk_wav_pipe(
@@ -365,7 +325,6 @@ def _processar_chunk_com_retry(
                 chunk["duracao_pipe"],
                 idioma,
             )
-            cache.salvar(caminho_video, chunk["index"], segmentos)
             return segmentos
         except Exception as e:
             if tentativa < tentativas - 1:

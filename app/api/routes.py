@@ -21,7 +21,8 @@ def processar_video():
     """
     arquivo_video = request.files.get("video")
     acao = request.form.get("action", "").strip()
-    idioma = request.form.get("language", "auto").strip()
+    idioma_raw = request.form.get("language", "auto").strip()
+    idioma = None if not idioma_raw or idioma_raw == "auto" else idioma_raw
     incluir_timestamps = request.form.get("timestamps", "true") == "true"
     formato_srt = request.form.get("srt_format", "false") == "true"
     

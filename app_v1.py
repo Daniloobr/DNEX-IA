@@ -8,12 +8,16 @@ from flask import Flask, jsonify, render_template, request, send_from_directory,
 from werkzeug.utils import secure_filename
 
 
+from dotenv import load_dotenv
+
 BASE_DIR = Path(__file__).resolve().parent
+load_dotenv(dotenv_path=BASE_DIR / ".env")
+
 UPLOAD_DIR = BASE_DIR / "uploads"
 OUTPUT_DIR = BASE_DIR / "outputs"
 
 ALLOWED_EXTENSIONS = {"mp4", "mov", "avi", "mkv", "webm"}
-MAX_CONTENT_LENGTH = 500 * 1024 * 1024
+MAX_CONTENT_LENGTH = int(os.getenv("MAX_CONTENT_LENGTH", 2048 * 1024 * 1024))
 
 
 app = Flask(__name__)

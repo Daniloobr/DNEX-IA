@@ -32,14 +32,12 @@ class Configuracao:
 
     # Configurações de performance (transcrição paralela com chunks)
     MAX_WORKERS_PARALELOS: int = int(os.getenv("MAX_WORKERS_PARALELOS", "4"))
-    PASTA_CACHE: Path = DIRETORIO_BASE / "cache_transcricao"
     
     @classmethod
     def inicializar_pastas(cls):
-        """Cria as pastas de upload, saída e cache se elas não existirem."""
+        """Cria as pastas de upload e saída se elas não existirem."""
         cls.PASTA_UPLOADS.mkdir(exist_ok=True, parents=True)
         cls.PASTA_SAIDA.mkdir(exist_ok=True, parents=True)
-        cls.PASTA_CACHE.mkdir(exist_ok=True, parents=True)
 
 # Instância global de configuração
 config = Configuracao()
