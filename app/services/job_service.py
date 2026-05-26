@@ -1,3 +1,4 @@
+import os
 import time
 import uuid
 import logging
@@ -9,14 +10,16 @@ from concurrent.futures import ThreadPoolExecutor
 from app.core.config import config
 from app.services.video_service import ServicoVideo
 from app.services.transcription_service import ServicoTranscricao
+from app.services.chunked_transcription_service import transcrever_com_chunks_paralelos
+from app.utils.ffmpeg_utils import obter_duracao
 
 logger = logging.getLogger(__name__)
 
 class JobManager:
     """
     Gerencia as tarefas de processamento de áudio/vídeo em segundo plano.
-    Utiliza um ThreadPoolExecutor para garantir processamento controlado
-    sem travar o servidor HTTP e sem estourar a RAM/CPU.
+    Usa um ThreadPoolExecutor dimensionado dinamicamente conforme os núcleos da CPU.
+    Para transcrições longas (>60s), ativa o modo paralelo com chunks.
     """
     _instancia = None
     _lock = threading.Lock()
@@ -31,11 +34,11 @@ class JobManager:
         return cls._instancia
 
     def _obter_executor(self) -> ThreadPoolExecutor:
-        """Garante a entrega de um executor ativo, recriando-o caso tenha sido finalizado."""
         with self.jobs_lock:
             if self.executor is None or getattr(self.executor, "_shutdown", False):
-                logger.info("🔧 Inicializando/Recriando ThreadPoolExecutor ativo para Dnex IA...")
-                self.executor = ThreadPoolExecutor(max_workers=2)
+                num_workers = max(2, config.MAX_WORKERS_PARALELOS)
+                logger.info(f"🔧 Inicializando ThreadPoolExecutor com {num_workers} workers...")
+                self.executor = ThreadPoolExecutor(max_workers=num_workers)
             return self.executor
 
     def criar_job(self, acao: str) -> str:
@@ -113,31 +116,44 @@ class JobManager:
                 self.atualizar_job(job_id, progress=90, message="Áudio MP3 gerado. Salvando resultado...")
                 mensagem = "Sucesso! Seu áudio está pronto para baixar."
             elif acao == "transcribe":
-                caminho_wav_temp = ServicoVideo.preparar_wav_transcricao(caminho_video)
-                
                 self.atualizar_job(
                     job_id,
                     step="transcribing",
-                    progress=15,
-                    message="Inicializando a engine de inteligência artificial..."
+                    progress=10,
+                    message="Preparando motor de inteligência artificial..."
                 )
-                
+
                 def progresso_whisper(percent_atual):
-                    # O progresso de transcrição mapeia a faixa de 15% a 95% do progresso total
-                    progresso_real = 15 + int(percent_atual * 0.80)
+                    progresso_real = 10 + int(percent_atual * 0.85)
                     self.atualizar_job(
                         job_id,
                         progress=progresso_real,
                         message=f"Transcrevendo com a IA Dnex... ({percent_atual}%)"
                     )
 
-                caminho_saida = ServicoTranscricao.transcrever(
-                    caminho_wav_temp,
-                    idioma=idioma,
-                    incluir_timestamps=incluir_timestamps,
-                    formato_srt=formato_srt,
-                    callback_progresso=progresso_whisper
-                )
+                duracao = obter_duracao(caminho_video)
+                logger.info(f"Duração do vídeo: {duracao:.1f}s — {'MODO RÁPIDO (chunks)' if duracao > 60 else 'MODO PADRÃO'}")
+
+                if duracao > 60:
+                    caminho_wav_temp = ServicoVideo.preparar_wav_transcricao(caminho_video)
+                    caminho_saida = transcrever_com_chunks_paralelos(
+                        caminho_video=caminho_video,
+                        caminho_wav_completo=caminho_wav_temp,
+                        idioma=idioma,
+                        incluir_timestamps=incluir_timestamps,
+                        formato_srt=formato_srt,
+                        callback_progresso=progresso_whisper,
+                    )
+                else:
+                    caminho_wav_temp = ServicoVideo.preparar_wav_transcricao(caminho_video)
+                    caminho_saida = ServicoTranscricao.transcrever(
+                        caminho_wav_temp,
+                        idioma=idioma,
+                        incluir_timestamps=incluir_timestamps,
+                        formato_srt=formato_srt,
+                        callback_progresso=progresso_whisper
+                    )
+
                 mensagem = "Sucesso! A transcrição foi concluída."
             else:
                 raise ValueError("Ação desconhecida ou inválida.")

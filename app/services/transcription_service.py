@@ -35,10 +35,13 @@ class ServicoTranscricao:
         sigla_idioma = None if not idioma or idioma == "auto" else idioma
         
         segmentos, info = motor.transcribe(
-            str(caminho_audio), 
-            language=sigla_idioma, 
+            str(caminho_audio),
+            language=sigla_idioma,
+            beam_size=1,
             vad_filter=True,
-            beam_size=1
+            condition_on_previous_text=False,
+            no_speech_threshold=0.6,
+            compression_ratio_threshold=2.4,
         )
         
         total_duration = info.duration if info and info.duration else 0.0
