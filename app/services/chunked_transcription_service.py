@@ -63,6 +63,8 @@ def _transcrever_chunk(
     idioma: Optional[str]
 ) -> List[dict]:
     """Transcreve um chunk de áudio e retorna lista de segmentos com timestamps ajustados."""
+    sigla_idioma = None if not idioma or idioma == "auto" else idioma
+
     inicio_carga = time.perf_counter()
     modelo = _obter_modelo_thread()
     tempo_carga = time.perf_counter() - inicio_carga
@@ -74,7 +76,7 @@ def _transcrever_chunk(
     tempo_transc = time.perf_counter()
     segmentos, info = modelo.transcribe(
         audio,
-        language=idioma,
+        language=sigla_idioma,
         beam_size=1,
         vad_filter=True,
         condition_on_previous_text=False,
